@@ -4,9 +4,10 @@ from GameController import GameController
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
 rooms = {}  # Dictionary to track active rooms and players
+game_controllers = {}  # Dictionary to track game controllers for each room
 
 @app.route('/')
 def index():
@@ -20,6 +21,7 @@ def handle_join(data):
     
     if room not in rooms:
         rooms[room] = []
+        game_controllers[room] = GameController()
     rooms[room].append(username)
 
     emit('status', {'message': f"{username} joined the room."}, room=room)
@@ -33,6 +35,9 @@ def handle_leave(data):
     
     if room in rooms and username in rooms[room]:
         rooms[room].remove(username)
+        if not rooms[room]:
+            del rooms[room]
+            del game_controllers[room]
     emit('status', {'message': f"{username} left the room."}, room=room)
     print(f"{username} left room: {room}")
 
@@ -40,8 +45,15 @@ def handle_leave(data):
 def handle_move(data):
     room = data['room']
     move = data['move']  
-    emit('opponent_move', {'move': move}, room=room, include_self=False)
-    print(f"Move in room {room}: {move}")
+    if room in game_controllers:
+        try:
+            game_controllers[room].make_move(move)
+            emit('opponent_move', {'move': move}, room=room, include_self=False)
+            print(f"Move in room {room}: {move}")
+        except Exception as e:
+            emit('error', {'message': f'Invalid move: {str(e)}'}, room=room)
+    else:
+        emit('error', {'message': 'Game controller not found for this room'}, room=room)
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000)
