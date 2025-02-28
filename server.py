@@ -1,59 +1,52 @@
-from flask import Flask, render_template
-from flask_socketio import SocketIO, join_room, leave_room, emit
-from GameController import GameController
+from flask import Flask, request
+from flask_socketio import SocketIO, emit, join_room, leave_room
+import os
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your_secret_key'
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+socketio = SocketIO(app, cors_allowed_origins="*")
 
-rooms = {}  # Dictionary to track active rooms and players
-game_controllers = {}  # Dictionary to track game controllers for each room
+rooms = {}  # Store game state for each room
 
 @app.route('/')
 def index():
-    return "Chess Game Server Running"
+    return "Chess server is running!"
 
-@socketio.on('join')
-def handle_join(data):
-    username = data['username']
+@socketio.on('connect')
+def handle_connect():
+    print(f"Client connected: {request.sid}")
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    print(f"Client disconnected: {request.sid}")
+
+@socketio.on('create_room')
+def create_room(data):
     room = data['room']
-    join_room(room)
-    
     if room not in rooms:
-        rooms[room] = []
-        game_controllers[room] = GameController()
-    rooms[room].append(username)
+        rooms[room] = {'players': [], 'moves': []}
+    join_room(room)
+    rooms[room]['players'].append(request.sid)
+    emit('room_created', {'message': f'Joined room {room}'}, room=room)
 
-    emit('status', {'message': f"{username} joined the room."}, room=room)
-    print(f"{username} joined room: {room}")
-
-@socketio.on('leave')
-def handle_leave(data):
-    username = data['username']
+@socketio.on('join_room')
+def join_room_event(data):
     room = data['room']
-    leave_room(room)
-    
-    if room in rooms and username in rooms[room]:
-        rooms[room].remove(username)
-        if not rooms[room]:
-            del rooms[room]
-            del game_controllers[room]
-    emit('status', {'message': f"{username} left the room."}, room=room)
-    print(f"{username} left room: {room}")
+    if room in rooms and len(rooms[room]['players']) < 2:
+        join_room(room)
+        rooms[room]['players'].append(request.sid)
+        emit('room_joined', {'message': f'Joined room {room}'}, room=room)
+    else:
+        emit('error', {'message': 'Room full or does not exist'})
 
 @socketio.on('move')
 def handle_move(data):
     room = data['room']
-    move = data['move']  
-    if room in game_controllers:
-        try:
-            game_controllers[room].make_move(move)
-            emit('opponent_move', {'move': move}, room=room, include_self=False)
-            print(f"Move in room {room}: {move}")
-        except Exception as e:
-            emit('error', {'message': f'Invalid move: {str(e)}'}, room=room)
-    else:
-        emit('error', {'message': 'Game controller not found for this room'}, room=room)
+    move = data['move']
+    if room in rooms:
+        rooms[room]['moves'].append(move)
+        emit('move', {'move': move}, room=room, include_self=False)
+
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=5000)
+    port = int(os.environ.get("PORT", 5000))  # Use environment variable or default to 5000
+    socketio.run(app, host="0.0.0.0", port=port)
